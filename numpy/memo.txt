@@ -1,0 +1,7 @@
+neurons 
+['興奮性か抑制性', [座標], V, count]
+
+synapse (数=neurons*neurons)
+[w1, w2, ]
+
+w = [pre_n, post_n, weight, model, model_2]
