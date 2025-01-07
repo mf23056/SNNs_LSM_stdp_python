@@ -71,6 +71,7 @@ class LSM:
         self.exc_input_log = torch.zeros(num_steps, device=self.device)
         self.inh_input_log = torch.zeros(num_steps, device=self.device)
         self.ei_diff_log = torch.zeros(num_steps, device=self.device)
+        random_indices = torch.randint(0, self.n_total, (200,), device=self.device)
 
         if calc_lyapunov:
             delta = torch.randn(self.n_total, device=self.device) * 1e-5
@@ -80,7 +81,7 @@ class LSM:
         for t in range(1, T):
             self.before_I = self.synapse(self.spike_state, self.weights, self.before_I)
             self.sum_I_syn = torch.sum(self.before_I, dim=0)
-            self.sum_I_syn[:200] += inputs[t]
+            self.sum_I_syn[random_indices] += inputs[t]
             self.spike_state, self.before_V, self.ref_time = self.neuron(self.sum_I_syn, self.before_V, self.ref_time)
 
             EI_input = torch.sum(self.before_I, dim=1)
@@ -98,12 +99,15 @@ class LSM:
                 _, perturbed_V, _ = self.neuron(self.sum_I_syn, perturbed_V, self.ref_time)
                 delta = perturbed_V - self.before_V
                 delta_norm = torch.norm(delta)
-                lyapunov_exponents[t] = torch.log(delta_norm)
+                delta_norm = max(delta_norm, 1e-10)  # 最小値を設定
+                lyapunov_exponents[t] = torch.log(torch.tensor(delta_norm, device=self.device))  # Tensorに変換
                 delta /= delta_norm
 
         if calc_lyapunov:
             self.lyapunov_exponents = lyapunov_exponents
-        return self.spike_record
+            self.average_lyapunov = torch.mean(lyapunov_exponents[1:])  # 最初を除外して平均
+            print(f"Average Lyapunov Exponent: {self.average_lyapunov.item()}")
+
 
     def save_spikes_to_csv(self, filename="spike_train.csv"):
         spike_train = self.spike_record.cpu().numpy()
@@ -135,14 +139,15 @@ class LSM:
             print("Lyapunov exponents were not calculated. Set calc_lyapunov=True when running the simulation.")
 
 if __name__ == '__main__':
-    scale_factor = 10
-    num_steps = 1000  # Number of time steps
+    scale_factor = 1000
+    num_steps = 2000  # Number of time steps
 
     # Generate random noise as input
     torch.manual_seed(42)
     random_input = torch.randn(num_steps, dtype=torch.float32) * scale_factor
 
     weight_file = '../random_netwrok/weights.csv'
+    # weight_file = None
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     print(device)
     random_input = random_input.to(device)
