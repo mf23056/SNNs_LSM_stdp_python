@@ -4,3 +4,6 @@ cuda/lsm/spikes_balance_50.csv
 cuda/lsm/spikes_random_100.csv
 cuda/lsm/spikes_random_50.csv
 cuda/lsm/spike_train_random.cs
+
+cuda/lyapunov/spike_train.csv
+

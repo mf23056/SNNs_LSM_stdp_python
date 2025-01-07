@@ -65,8 +65,8 @@ class LSM:
             self.weights = torch.randn(self.n_total, self.n_total, device=self.device)
 
     def run_simulation(self, inputs, calc_lyapunov=False):
-        #T = inputs.size(0)
-        T = 100
+        T = inputs.size(0)
+        #T = 100
         self.spike_record = torch.zeros((self.n_total, T), device=self.device)
         
         num_steps = T
