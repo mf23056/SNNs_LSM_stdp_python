@@ -23,6 +23,7 @@ class LIF:
         V = torch.where(spiked > 0, torch.full_like(V, self.V_reset), V)
         return spiked, V, ref_time
 
+
 class StaticSynapse:
     def __init__(self, dt=0.01, tau_syn=25):
         self.dt = dt
@@ -31,6 +32,7 @@ class StaticSynapse:
     def __call__(self, bin_spike, W, before_I):
         spikes = bin_spike.unsqueeze(1)
         return before_I + self.dt * (-before_I / self.tau_syn) + W * spikes
+
 
 class LSM:
     def __init__(self, n_exc, n_inh, dt=0.01, device='cuda', weight_file=None):
@@ -62,48 +64,56 @@ class LSM:
         else:
             self.weights = torch.randn(self.n_total, self.n_total, device=self.device)
 
-    def calculate_jacobian(self):
-        J = torch.zeros((self.n_total, self.n_total), device=self.device)
-        dV_dV = -1 / self.neuron.tau_m
-        dV_dI = 1 / self.neuron.tau_m
-        dI_dI = -1 / self.synapse.tau_syn
-        dI_dV = self.weights / self.synapse.tau_syn
-        J += torch.diag(torch.full((self.n_total,), dV_dV, device=self.device))
-        J += torch.diag(torch.full((self.n_total,), dV_dI, device=self.device), offset=0)
-        J += dI_dV
-        J += torch.diag(torch.full((self.n_total,), dI_dI, device=self.device))
-        return J
-
-    def run_simulation(self, inputs):
+    def run_simulation(self, inputs, calc_lyapunov=False):
         T = inputs.size(0)
         self.spike_record = torch.zeros((self.n_total, T), device=self.device)
-        self.Phi = torch.eye(self.n_total, device=self.device)
+        
+        num_steps = T
+        self.exc_input_log = torch.zeros(num_steps, device=self.device)
+        self.inh_input_log = torch.zeros(num_steps, device=self.device)
+        self.ei_diff_log = torch.zeros(num_steps, device=self.device)
 
-        for t in range(1, 100):
+        if calc_lyapunov:
+            delta = 1e-8
+            perturbation = delta * torch.randn_like(self.before_V)
+            V_perturbed = self.before_V + perturbation
+            lyapunov_exponents = torch.zeros(num_steps, device=self.device)
+
+        for t in range(1, T):
             self.before_I = self.synapse(self.spike_state, self.weights, self.before_I)
             self.sum_I_syn = torch.sum(self.before_I, dim=0)
             self.sum_I_syn[:200] += inputs[t]
+
+            if calc_lyapunov:
+                spiked, V, ref_time = self.neuron(self.sum_I_syn, self.before_V, self.ref_time)
+                spiked_pert, V_perturbed, ref_time_pert = self.neuron(self.sum_I_syn, V_perturbed, self.ref_time)
+
+                distance = torch.norm(V - V_perturbed)
+                lyapunov_exponents[t] = torch.log(distance / delta) / self.dt
+
+                V_perturbed = V + (delta / distance) * (V_perturbed - V)
+
             self.spike_state, self.before_V, self.ref_time = self.neuron(self.sum_I_syn, self.before_V, self.ref_time)
-            J = self.calculate_jacobian()
-            exp_J = torch.matrix_exp(J * self.dt)
-            spiked_indices = (self.spike_state > 0).nonzero(as_tuple=True)
-            S = torch.eye(self.n_total, device=self.device)
-            S[spiked_indices, spiked_indices] = 0
-            self.Phi = S @ exp_J @ self.Phi
+            EI_input = torch.sum(self.before_I, dim=1)
+            exc_input = torch.sum(EI_input[:self.n_exc])
+            inh_input = torch.sum(EI_input[self.n_exc:])
+            ei_diff = exc_input + inh_input
+
+            self.exc_input_log[t] = exc_input
+            self.inh_input_log[t] = inh_input
+            self.ei_diff_log[t] = ei_diff
             self.spike_record[:, t] = self.spike_state
-        return self.spike_record
 
-    def calculate_lyapunov_exponents(self):
-        eigenvalues, _ = torch.linalg.eig(self.Phi)
-        lyapunov_exponents = torch.log(torch.abs(eigenvalues)).real / self.Phi.size(0)
-        lambda_max = lyapunov_exponents.max()
-        return lambda_max
-
+        if calc_lyapunov:
+            return self.spike_record, lyapunov_exponents
+        else:
+            return self.spike_record
+    
     def save_spikes_to_csv(self, filename="spike_train.csv"):
         spike_train = self.spike_record.cpu().numpy()
         np.savetxt(filename, spike_train, delimiter=",")
         print(f"Spikes saved to {filename}")
-
+    
     def plot_raster(self):
         spike_times = torch.nonzero(self.spike_record, as_tuple=False)
         plt.figure(figsize=(12, 8))
@@ -113,6 +123,7 @@ class LSM:
         plt.title("Spike Raster Plot")
         plt.savefig("spike_raster_lsm.png", dpi=300)
         plt.show()
+
 
 if __name__ == '__main__':
     scale_factor = 10
@@ -126,10 +137,18 @@ if __name__ == '__main__':
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     input_tensor = input_tensor.to(device)
     input_tensor *= scale_factor
-
+    
     network = LSM(n_exc=1000, n_inh=250, device=device, weight_file=weight_file)
-    spike_record = network.run_simulation(input_tensor)
-    lambda_max = network.calculate_lyapunov_exponents()
-    print(f"Maximum Lyapunov Exponent: {lambda_max}")
+    spike_record, lyapunov_exponents = network.run_simulation(input_tensor, calc_lyapunov=True)
+
     network.plot_raster()
     network.save_spikes_to_csv()
+
+    plt.figure()
+    plt.plot(lyapunov_exponents.cpu().numpy(), label="Lyapunov Exponents")
+    plt.xlabel("Time Step")
+    plt.ylabel("Exponent Value")
+    plt.title("Network Lyapunov Exponents")
+    plt.legend()
+    plt.savefig("lyapunov_exponents.png", dpi=300)
+    plt.show()
