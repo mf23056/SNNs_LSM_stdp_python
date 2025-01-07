@@ -136,20 +136,19 @@ class LSM:
 
 if __name__ == '__main__':
     scale_factor = 10
-    data = pd.read_csv('../NARMA10/narma10_data.csv')
-    time_tensor = torch.tensor(data['Time'].values, dtype=torch.float32)
-    input_tensor = torch.tensor(data['Input'].values, dtype=torch.float32)
-    output_tensor = torch.tensor(data['Output'].values, dtype=torch.float32)
+    num_steps = 1000  # Number of time steps
+
+    # Generate random noise as input
+    torch.manual_seed(42)
+    random_input = torch.randn(num_steps, dtype=torch.float32) * scale_factor
 
     weight_file = '../random_netwrok/weights.csv'
-    torch.manual_seed(42)
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     print(device)
-    input_tensor = input_tensor.to(device)
-    input_tensor *= scale_factor
-    
+    random_input = random_input.to(device)
+
     network = LSM(n_exc=1000, n_inh=250, device=device, weight_file=weight_file)
-    spike_record = network.run_simulation(input_tensor, calc_lyapunov=True)
+    spike_record = network.run_simulation(random_input, calc_lyapunov=True)
     network.plot_raster()
     network.save_spikes_to_csv()
     network.plot_lyapunov_exponents()
